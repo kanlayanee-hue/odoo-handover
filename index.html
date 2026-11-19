@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>สแกนออเดอร์ส่งไรเดอร์</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:linear-gradient(160deg,#f3eefb,#eef1fb);color:#1f2437;font:16px/1.5 "Noto Sans Thai",system-ui,sans-serif}
+main{max-width:480px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:24px;margin:8px 0 2px;text-align:center}
+.sub{text-align:center;color:#5b6177;margin:0 0 18px;font-size:14px}
+.card{background:#fff;border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 2px 10px rgba(40,50,90,.08)}
+label{display:block;font-size:14px;font-weight:600;margin-bottom:6px}
+input,textarea{width:100%;padding:12px;border:1px solid #d9dcea;border-radius:10px;font:inherit;background:#f7f8fc}
+textarea{min-height:60px}
+button{width:100%;padding:13px;border:0;border-radius:10px;font:inherit;font-weight:600;background:#2f4ee0;color:#fff;margin-top:10px;cursor:pointer}
+button.g{background:#eef0f8;color:#1f2437}button:disabled{opacity:.5}
+:focus-visible{outline:3px solid #8da0ff;outline-offset:2px}
+#reader{border-radius:10px;overflow:hidden;margin-top:10px}
+.tag{display:inline-block;font-size:13px;padding:1px 10px;border-radius:99px;background:#e3f6ec;color:#17704a;margin-right:6px}
+.warn{background:#fff4dc;color:#7a5200;border-radius:8px;padding:8px 10px;margin-top:8px;font-size:14px}
+.th{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.th div{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden}
+.th img{width:100%;height:100%;object-fit:cover}
+.th b{position:absolute;top:4px;right:4px;width:26px;height:26px;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;text-align:center;line-height:26px;cursor:pointer}
+.msg{padding:10px 12px;border-radius:10px;margin-top:10px;font-size:15px}
+.ok{background:#e3f6ec;color:#17704a}.er{background:#fde8e8;color:#a32121}
+.h{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eceef6;font-size:14px}
+.h:last-child{border:0}.mu{color:#7a8097;text-align:center;font-size:14px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+<h1>📦 สแกนออเดอร์ส่งไรเดอร์</h1>
+<p class="sub">พร้อมบันทึกรูปของลง Odoo อัตโนมัติ</p>
+
+<div class="card" id="setup" hidden>
+  <label for="pin">รหัสเข้าแอป</label><input id="pin" type="password" inputmode="numeric" autocomplete="off">
+  <p></p><label for="staff">ชื่อพนักงานแพ็ก</label><input id="staff">
+  <button id="enter">เข้าใช้งาน</button><div id="setErr"></div>
+</div>
+
+<div id="app" hidden>
+  <div class="card">
+    <label for="code">เลขออเดอร์ล่าสุด</label>
+    <input id="code" placeholder="ไม่ต้องคลิก เสียบเครื่องสแกนแล้วยิงได้เลย" autocomplete="off">
+    <button id="cam">▶️ เปิดกล้อง</button>
+    <div id="reader"></div>
+    <div id="findOut"></div>
+  </div>
+
+  <div class="card" id="shoot" hidden>
+    <span class="tag" id="oBy"></span><b id="oName"></b><br><small id="oCust" style="color:#5b6177"></small>
+    <div class="warn" id="oWarn" hidden>ออเดอร์นี้ไม่ใช่ Grab / รับเอง / จัดส่งเอง / รับสินค้าเอง ตรวจสอบก่อนบันทึก</div>
+    <p></p><label>ถ่ายรูปของที่ส่งให้ไรเดอร์ (สูงสุด 8 รูป)</label>
+    <input id="pic" type="file" accept="image/*" capture="environment" multiple>
+    <div class="th" id="th"></div>
+    <p></p><label for="note">หมายเหตุ (ไม่บังคับ)</label><textarea id="note"></textarea>
+    <button id="save" disabled>บันทึกลง Odoo</button>
+    <button class="g" id="cancel">ยกเลิก</button>
+    <div id="saveOut"></div>
+  </div>
+
+  <div class="card">
+    <label>🕘 ประวัติการบันทึกล่าสุด</label>
+    <div id="hist"></div>
+  </div>
+</div>
+</main>
+
+<script>
+// ใส่ลิงก์ Web app ที่ได้จาก Apps Script ตรงนี้
+const API_URL='https://script.google.com/macros/s/AKfycbxkDf8IGXHMTyEXWFSDV8V1G7x2E7TYUFudLhm9ht9Oh5mkusSdO_iViD56s3nikM1r/exec';
+
+const $=id=>document.getElementById(id);
+let pin=localStorage.getItem('pin')||'', staff=localStorage.getItem('staff')||'', cur=null, pics=[], sc=null, busy=false;
+
+async function api(body){
+  const r=await fetch(API_URL,{method:'POST',body:JSON.stringify({...body,pin})});
+  const j=await r.json(); if(j.error) throw new Error(j.error); return j;
+}
+function msg(el,cls,t){ el.innerHTML='<div class="msg '+cls+'"></div>'; el.firstChild.textContent=t }
+
+function start(){ $('setup').hidden=true; $('app').hidden=false; hist(); $('code').focus() }
+if(pin&&staff) start(); else $('setup').hidden=false;
+$('enter').onclick=async()=>{
+  pin=$('pin').value.trim(); staff=$('staff').value.trim();
+  if(!pin||!staff) return msg($('setErr'),'er','กรอกรหัสและชื่อพนักงาน');
+  try{ await api({action:'ping'}); localStorage.setItem('pin',pin); localStorage.setItem('staff',staff); start() }
+  catch(e){ msg($('setErr'),'er',e.message) }
+};
+
+$('code').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); find($('code').value) } });
+
+$('cam').onclick=async()=>{
+  if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง'; return }
+  try{
+    sc=sc||new Html5Qrcode('reader');
+    await sc.start({facingMode:'environment'},{fps:10,qrbox:{width:240,height:240}},t=>find(t),()=>{});
+    $('cam').textContent='⏹ ปิดกล้อง';
+  }catch(e){ msg($('findOut'),'er','เปิดกล้องไม่ได้ อนุญาตการใช้กล้องในเบราว์เซอร์') }
+};
+
+async function find(text){
+  text=(text||'').trim(); if(!text||busy) return; busy=true;
+  $('findOut').innerHTML='<p class="mu">กำลังค้นหา…</p>';
+  try{
+    cur=await api({action:'lookup',code:text});
+    if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง' }
+    if(navigator.vibrate) navigator.vibrate(60);
+    pics=[]; draw(); $('findOut').innerHTML=''; $('saveOut').innerHTML=''; $('note').value='';
+    $('oBy').textContent=cur.delivery_by.join(', ')||'ยังไม่มีใบส่งของ';
+    $('oName').textContent=cur.name+(cur.model==='stock.picking'?' (ใบส่งของ)':'');
+    $('oCust').textContent=cur.partner; $('oWarn').hidden=cur.allowed; $('shoot').hidden=false;
+  }catch(e){ msg($('findOut'),'er',e.message); $('code').select() }
+  busy=false;
+}
+
+function shrink(f){return new Promise(res=>{
+  const im=new Image(); im.onload=()=>{
+    const s=Math.min(1,1400/Math.max(im.width,im.height)), c=document.createElement('canvas');
+    c.width=im.width*s; c.height=im.height*s; c.getContext('2d').drawImage(im,0,0,c.width,c.height);
+    res(c.toDataURL('image/jpeg',.75)); URL.revokeObjectURL(im.src);
+  }; im.src=URL.createObjectURL(f);
+})}
+$('pic').onchange=async e=>{ for(const f of e.target.files){ if(pics.length<8) pics.push(await shrink(f)) } e.target.value=''; draw() };
+function draw(){
+  $('th').innerHTML='';
+  pics.forEach((p,i)=>{ const d=document.createElement('div'),im=document.createElement('img'),x=document.createElement('b');
+    im.src=p; x.textContent='×'; x.onclick=()=>{pics.splice(i,1);draw()}; d.append(im,x); $('th').append(d) });
+  $('save').disabled=!pics.length;
+}
+function reset(){ cur=null; pics=[]; $('shoot').hidden=true; $('code').value=''; $('code').focus() }
+$('cancel').onclick=reset;
+
+$('save').onclick=async()=>{
+  if(!cur.allowed && !confirm('ออเดอร์นี้ไม่ใช่ 4 ประเภทที่กำหนด ต้องการบันทึกต่อหรือไม่')) return;
+  $('save').disabled=true; $('save').textContent='กำลังบันทึก…';
+  try{
+    const r=await api({action:'save',model:cur.model,id:cur.id,staff,note:$('note').value,photos:pics.map(p=>p.split(',')[1])});
+    const h=JSON.parse(localStorage.getItem('hist')||'[]');
+    h.unshift({n:r.name,c:r.photos,t:new Date().toLocaleString('th-TH',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})});
+    localStorage.setItem('hist',JSON.stringify(h.slice(0,10))); hist();
+    msg($('saveOut'),'ok','บันทึกแล้ว '+r.photos+' รูป ที่ '+r.name); setTimeout(reset,1800);
+  }catch(e){ msg($('saveOut'),'er',e.message) }
+  $('save').textContent='บันทึกลง Odoo'; draw();
+};
+function hist(){
+  const h=JSON.parse(localStorage.getItem('hist')||'[]'); $('hist').innerHTML='';
+  if(!h.length) return $('hist').innerHTML='<p class="mu">ยังไม่มีข้อมูล</p>';
+  h.forEach(x=>{ const d=document.createElement('div'); d.className='h'; d.innerHTML='<span></span><span></span>';
+    d.children[0].textContent=x.n+' · '+x.c+' รูป'; d.children[1].textContent=x.t; $('hist').append(d) });
+}
+</script>
+</body>
+</html>
