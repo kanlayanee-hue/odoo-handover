@@ -77,7 +77,7 @@ button.g{background:#eef0f8;color:#1f2437}button:disabled{opacity:.5}
 const API_URL='https://script.google.com/macros/s/AKfycbxkDf8IGXHMTyEXWFSDV8V1G7x2E7TYUFudLhm9ht9Oh5mkusSdO_iViD56s3nikM1r/exec';
 
 const $=id=>document.getElementById(id);
-let pin=localStorage.getItem('pin')||'', staff=localStorage.getItem('staff')||'', cur=null, pics=[], sc=null, busy=false;
+let pin=localStorage.getItem('pin')||'', staff=localStorage.getItem('staff')||'', cur=null, pics=[], sc=null, busy=false, lastCode='', lastAt=0;
 
 async function api(body){
   const r=await fetch(API_URL,{method:'POST',body:JSON.stringify({...body,pin})});
@@ -100,16 +100,49 @@ $('cam').onclick=async()=>{
   if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง'; return }
   try{
     sc=sc||new Html5Qrcode('reader');
-    await sc.start({facingMode:'environment'},{fps:10,qrbox:{width:240,height:240}},t=>find(t),()=>{});
+    await sc.start({facingMode:'environment'},{fps:10,qrbox:{width:240,height:240},videoConstraints:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}}},t=>{ if(!busy) find(t,snap()) },()=>{});
     $('cam').textContent='⏹ ปิดกล้อง';
   }catch(e){ msg($('findOut'),'er','เปิดกล้องไม่ได้ อนุญาตการใช้กล้องในเบราว์เซอร์') }
 };
 
-async function find(text){
-  text=(text||'').trim(); if(!text||busy) return; busy=true;
+// ถอดเลขออเดอร์ออกจากข้อความใน QR (กรณีเป็น URL หรือข้อความยาว)
+function norm(t){
+  t=(t||'').trim(); if(!t) return '';
+  if(/^[A-Za-z0-9._\/\-]{3,40}$/.test(t)) return t;
+  const m=t.match(/\b\d{6}[A-Z0-9]{6,10}\b/)||t.match(/\bJTTH\d{8,}\b/);
+  return m?m[0]:t;
+}
+// ถ่ายภาพจากเฟรมกล้องในจังหวะที่สแกนได้
+function snap(){
+  const v=document.querySelector('#reader video'); if(!v||!v.videoWidth) return null;
+  const s=Math.min(1,1400/Math.max(v.videoWidth,v.videoHeight)), c=document.createElement('canvas');
+  c.width=v.videoWidth*s; c.height=v.videoHeight*s; c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+  return c.toDataURL('image/jpeg',.8);
+}
+function addHist(n,c){
+  const h=JSON.parse(localStorage.getItem('hist')||'[]');
+  h.unshift({n:n,c:c,t:new Date().toLocaleString('th-TH',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})});
+  localStorage.setItem('hist',JSON.stringify(h.slice(0,10))); hist();
+}
+// งานส่งด่วน: ใช้ภาพจากกล้องบันทึกลงชีตทันที กล้องยังเปิดอยู่เพื่อสแกนใบต่อไป
+async function quickSave(c,frame){
+  msg($('findOut'),'ok','กำลังบันทึก '+c.code+' …');
+  try{
+    const r=await api({action:'save',code:c.code,route:'sheet',staff,note:'',photos:[frame.split(',')[1]]});
+    addHist(r.name,r.photos); lastCode=c.code; lastAt=Date.now();
+    if(navigator.vibrate) navigator.vibrate(60);
+    msg($('findOut'),'ok','บันทึกแล้ว '+c.code+(c.found?' (ส่งด่วน → ชีต)':' (ไม่พบใน Odoo → ชีต)'));
+  }catch(e){ msg($('findOut'),'er',e.message) }
+}
+
+async function find(text,frame){
+  text=norm(text); if(!text||busy) return;
+  if(frame && text===lastCode && Date.now()-lastAt<6000) return;
+  busy=true;
   $('findOut').innerHTML='<p class="mu">กำลังค้นหา…</p>';
   try{
     cur=await api({action:'lookup',code:text});
+    if(frame && cur.route==='sheet'){ await quickSave(cur,frame); busy=false; return }
     if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง' }
     if(navigator.vibrate) navigator.vibrate(60);
     pics=[]; draw(); $('findOut').innerHTML=''; $('saveOut').innerHTML=''; $('note').value='';
