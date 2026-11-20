@@ -97,15 +97,27 @@ $('enter').onclick=async()=>{
 $('code').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); find($('code').value) } });
 
 $('cam').onclick=async()=>{
+  unlockAudio();
   if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง'; return }
   try{
-    sc=sc||new Html5Qrcode('reader');
-    await sc.start({facingMode:'environment'},{fps:10,qrbox:{width:240,height:240},videoConstraints:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}}},t=>{ if(!busy) find(t,snap()) },()=>{});
+    sc=sc||new Html5Qrcode('reader',{formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE,Html5QrcodeSupportedFormats.CODE_128,Html5QrcodeSupportedFormats.CODE_39],experimentalFeatures:{useBarCodeDetectorIfSupported:true},verbose:false});
+    await sc.start({facingMode:'environment'},{fps:25,disableFlip:true,qrbox:(w,h)=>({width:Math.floor(w*.92),height:Math.floor(h*.8)}),videoConstraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}},t=>{ if(!busy) find(t,snap()) },()=>{});
     $('cam').textContent='⏹ ปิดกล้อง';
   }catch(e){ msg($('findOut'),'er','เปิดกล้องไม่ได้ อนุญาตการใช้กล้องในเบราว์เซอร์') }
 };
 
 // ถอดเลขออเดอร์ออกจากข้อความใน QR (กรณีเป็น URL หรือข้อความยาว)
+// เสียงบี๊บ (Web Audio) ไม่ต้องใช้ไฟล์เสียง
+let actx=null;
+function unlockAudio(){ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume() }catch(e){} }
+document.addEventListener('pointerdown',unlockAudio);
+function tone(f,ms,delay){ try{ if(!actx) return; const t0=actx.currentTime+(delay||0)/1000, o=actx.createOscillator(), g=actx.createGain();
+  o.type='sine'; o.frequency.value=f; g.gain.setValueAtTime(.3,t0); g.gain.exponentialRampToValueAtTime(.001,t0+ms/1000);
+  o.connect(g); g.connect(actx.destination); o.start(t0); o.stop(t0+ms/1000) }catch(e){} }
+const beepScan=()=>tone(1800,90);                          // อ่านเจอ
+const beepOK=()=>{ tone(900,90); tone(1350,140,110) };      // บันทึกสำเร็จ
+const beepErr=()=>tone(280,350);                            // ผิดพลาด
+
 function norm(t){
   t=(t||'').trim(); if(!t) return '';
   if(/^[A-Za-z0-9._\/\-]{3,40}$/.test(t)) return t;
@@ -131,14 +143,14 @@ async function quickSave(c,frame){
     const r=await api({action:'save',code:c.code,route:'sheet',staff,note:'',photos:[frame.split(',')[1]]});
     addHist(r.name,r.photos); lastCode=c.code; lastAt=Date.now();
     if(navigator.vibrate) navigator.vibrate(60);
-    msg($('findOut'),'ok','บันทึกแล้ว '+c.code+(c.found?' (ส่งด่วน → ชีต)':' (ไม่พบใน Odoo → ชีต)'));
-  }catch(e){ msg($('findOut'),'er',e.message) }
+    msg($('findOut'),'ok','บันทึกแล้ว '+c.code+(c.found?' (ส่งด่วน → ชีต)':' (ไม่พบใน Odoo → ชีต)')); beepOK();
+  }catch(e){ msg($('findOut'),'er',e.message); beepErr() }
 }
 
 async function find(text,frame){
   text=norm(text); if(!text||busy) return;
   if(frame && text===lastCode && Date.now()-lastAt<6000) return;
-  busy=true;
+  busy=true; beepScan();
   $('findOut').innerHTML='<p class="mu">กำลังค้นหา…</p>';
   try{
     cur=await api({action:'lookup',code:text});
@@ -152,7 +164,7 @@ async function find(text,frame){
     $('oCust').textContent=(cur.partner||'')+((cur.delivery_by||[]).length?' · '+cur.delivery_by.join(', '):'');
     $('oWarn').textContent=cur.found?'งานส่งด่วน (ไม่ใช่ Grab / รับเอง / จัดส่งเอง / รับสินค้าเอง) จะบันทึกลงชีตอย่างเดียว':'ไม่พบเลขนี้ใน Odoo จะบันทึกลงชีตอย่างเดียว ตรวจเลขให้ถูกก่อนบันทึก';
     $('oWarn').hidden=odoo; $('shoot').hidden=false;
-  }catch(e){ msg($('findOut'),'er',e.message); $('code').select() }
+  }catch(e){ msg($('findOut'),'er',e.message); beepErr(); $('code').select() }
   busy=false;
 }
 
@@ -181,8 +193,8 @@ $('save').onclick=async()=>{
     const h=JSON.parse(localStorage.getItem('hist')||'[]');
     h.unshift({n:r.name,c:r.photos,t:new Date().toLocaleString('th-TH',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})});
     localStorage.setItem('hist',JSON.stringify(h.slice(0,10))); hist();
-    msg($('saveOut'),'ok','บันทึกแล้ว '+r.photos+' รูป ที่ '+r.name+(r.odoo?' (ส่งเข้า Odoo และชีต)':' (ชีต)')); setTimeout(reset,1800);
-  }catch(e){ msg($('saveOut'),'er',e.message) }
+    msg($('saveOut'),'ok','บันทึกแล้ว '+r.photos+' รูป ที่ '+r.name+(r.odoo?' (ส่งเข้า Odoo และชีต)':' (ชีต)')); beepOK(); setTimeout(reset,1800);
+  }catch(e){ msg($('saveOut'),'er',e.message); beepErr() }
   $('save').textContent='บันทึกลง Odoo'; draw();
 };
 function hist(){
