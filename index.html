@@ -113,9 +113,12 @@ async function find(text){
     if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง' }
     if(navigator.vibrate) navigator.vibrate(60);
     pics=[]; draw(); $('findOut').innerHTML=''; $('saveOut').innerHTML=''; $('note').value='';
-    $('oBy').textContent=cur.delivery_by.join(', ')||'ยังไม่มีใบส่งของ';
-    $('oName').textContent=cur.name+(cur.model==='stock.picking'?' (ใบส่งของ)':'');
-    $('oCust').textContent=cur.partner; $('oWarn').hidden=cur.allowed; $('shoot').hidden=false;
+    const odoo=cur.route==='odoo';
+    $('oBy').textContent=odoo?'Odoo + ชีต':'ชีตอย่างเดียว';
+    $('oName').textContent=cur.found?cur.name+(cur.model==='stock.picking'?' (ใบส่งของ)':''):cur.code;
+    $('oCust').textContent=(cur.partner||'')+((cur.delivery_by||[]).length?' · '+cur.delivery_by.join(', '):'');
+    $('oWarn').textContent=cur.found?'งานส่งด่วน (ไม่ใช่ Grab / รับเอง / จัดส่งเอง / รับสินค้าเอง) จะบันทึกลงชีตอย่างเดียว':'ไม่พบเลขนี้ใน Odoo จะบันทึกลงชีตอย่างเดียว ตรวจเลขให้ถูกก่อนบันทึก';
+    $('oWarn').hidden=odoo; $('shoot').hidden=false;
   }catch(e){ msg($('findOut'),'er',e.message); $('code').select() }
   busy=false;
 }
@@ -138,14 +141,14 @@ function reset(){ cur=null; pics=[]; $('shoot').hidden=true; $('code').value='';
 $('cancel').onclick=reset;
 
 $('save').onclick=async()=>{
-  if(!cur.allowed && !confirm('ออเดอร์นี้ไม่ใช่ 4 ประเภทที่กำหนด ต้องการบันทึกต่อหรือไม่')) return;
+  if(!cur.found && !confirm('ไม่พบเลขนี้ใน Odoo บันทึกเป็นงานส่งด่วน (ชีตอย่างเดียว) ใช่ไหม')) return;
   $('save').disabled=true; $('save').textContent='กำลังบันทึก…';
   try{
-    const r=await api({action:'save',model:cur.model,id:cur.id,staff,note:$('note').value,photos:pics.map(p=>p.split(',')[1])});
+    const r=await api({action:'save',code:cur.code,route:cur.route,model:cur.model,id:cur.id,staff,note:$('note').value,photos:pics.map(p=>p.split(',')[1])});
     const h=JSON.parse(localStorage.getItem('hist')||'[]');
     h.unshift({n:r.name,c:r.photos,t:new Date().toLocaleString('th-TH',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})});
     localStorage.setItem('hist',JSON.stringify(h.slice(0,10))); hist();
-    msg($('saveOut'),'ok','บันทึกแล้ว '+r.photos+' รูป ที่ '+r.name); setTimeout(reset,1800);
+    msg($('saveOut'),'ok','บันทึกแล้ว '+r.photos+' รูป ที่ '+r.name+(r.odoo?' (ส่งเข้า Odoo และชีต)':' (ชีต)')); setTimeout(reset,1800);
   }catch(e){ msg($('saveOut'),'er',e.message) }
   $('save').textContent='บันทึกลง Odoo'; draw();
 };
