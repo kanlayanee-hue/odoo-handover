@@ -19,7 +19,9 @@ textarea{min-height:60px}
 button{width:100%;padding:13px;border:0;border-radius:10px;font:inherit;font-weight:600;background:#2f4ee0;color:#fff;margin-top:10px;cursor:pointer}
 button.g{background:#eef0f8;color:#1f2437}button:disabled{opacity:.5}
 :focus-visible{outline:3px solid #8da0ff;outline-offset:2px}
-#reader{border-radius:10px;overflow:hidden;margin-top:10px}
+#rwrap{position:relative;margin-top:10px}#reader{border-radius:10px;overflow:hidden}
+#flash{position:absolute;inset:0;border:8px solid #22c55e;border-radius:10px;box-shadow:inset 0 0 40px rgba(34,197,94,.55);pointer-events:none;opacity:0;transition:opacity .06s}#flash.on{opacity:1}
+.snd{display:flex;align-items:center;gap:8px;font-weight:400;margin:10px 0 0;color:#5b6177}.snd input{width:auto;padding:0}
 .tag{display:inline-block;font-size:13px;padding:1px 10px;border-radius:99px;background:#e3f6ec;color:#17704a;margin-right:6px}
 .warn{background:#fff4dc;color:#7a5200;border-radius:8px;padding:8px 10px;margin-top:8px;font-size:14px}
 .th{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
@@ -49,7 +51,8 @@ button.g{background:#eef0f8;color:#1f2437}button:disabled{opacity:.5}
     <label for="code">เลขออเดอร์ล่าสุด</label>
     <input id="code" placeholder="ไม่ต้องคลิก เสียบเครื่องสแกนแล้วยิงได้เลย" autocomplete="off">
     <button id="cam">▶️ เปิดกล้อง</button>
-    <div id="reader"></div>
+    <label class="snd"><input type="checkbox" id="snd"> เปิดเสียงบี๊บตอนจับได้</label>
+    <div id="rwrap"><div id="reader"></div><div id="flash"></div></div>
     <div id="findOut"></div>
     <div id="qstat"></div>
     <div id="todo" class="mu"></div>
@@ -86,6 +89,11 @@ async function api(body){
   const j=await r.json(); if(j.error) throw new Error(j.error); return j;
 }
 setInterval(()=>{ if(!document.hidden&&sc&&sc.isScanning) api({action:'ping'}).catch(()=>{}) },240000);
+let scanCount=0;
+$('snd').checked=localStorage.getItem('snd')==='1';
+$('snd').onchange=()=>{ localStorage.setItem('snd',$('snd').checked?'1':'0'); unlockAudio() };
+const sndOn=()=>$('snd').checked;
+function flash(){ const f=$('flash'); f.classList.add('on'); clearTimeout(flash.t); flash.t=setTimeout(()=>f.classList.remove('on'),420) }
 function msg(el,cls,t){ el.innerHTML='<div class="msg '+cls+'"></div>'; el.firstChild.textContent=t }
 
 function start(){ $('setup').hidden=true; $('app').hidden=false; hist(); $('code').focus() }
@@ -104,7 +112,7 @@ $('cam').onclick=async()=>{
   if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง'; return }
   try{
     sc=sc||new Html5Qrcode('reader',{formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE,Html5QrcodeSupportedFormats.CODE_128,Html5QrcodeSupportedFormats.CODE_39],experimentalFeatures:{useBarCodeDetectorIfSupported:true},verbose:false});
-    await sc.start({facingMode:'environment'},{fps:25,disableFlip:true,qrbox:(w,h)=>({width:Math.floor(w*.92),height:Math.floor(h*.8)}),videoConstraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}},t=>{ const c=norm(t); if(c===lastCode&&Date.now()-lastAt<6000) return; const cv=grab(); if(cv) beepScan(); find(t,cv) },()=>{});
+    await sc.start({facingMode:'environment'},{fps:25,disableFlip:true,qrbox:(w,h)=>({width:Math.floor(w*.92),height:Math.floor(h*.8)}),videoConstraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}},t=>{ const c=norm(t); if(c===lastCode&&Date.now()-lastAt<6000) return; const cv=grab(); if(cv){ flash(); if(sndOn()) beepScan() } find(t,cv) },()=>{});
     $('cam').textContent='⏹ ปิดกล้อง';
   }catch(e){ msg($('findOut'),'er','เปิดกล้องไม่ได้ อนุญาตการใช้กล้องในเบราว์เซอร์') }
 };
@@ -156,7 +164,7 @@ const queue=[], failed=[]; let sending=0, qDone=false;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function enqueue(job){ queue.push(job); pump(); updateStatus() }
 function pump(){
-  while(sending<2 && queue.length){
+  while(sending<4 && queue.length){
     const job=queue.shift(); sending++;
     (async()=>{
       try{
@@ -214,16 +222,17 @@ async function find(text,frame){
     lastCode=text; lastAt=Date.now();
     if(navigator.vibrate) navigator.vibrate(60);
     enqueue({code:text,photo:encode(frame)});
-    msg($('findOut'),'ok','รับแล้ว '+text+' …');
+    const n=++scanCount;
+    msg($('findOut'),'ok','รับแล้ว '+text+' (ใบที่ '+n+')');
     try{
       const r=await api({action:'lookup',code:text}); r.sheetDone=true;
       if(r.route==='odoo'){ beepOK(); offer(r) }
-      else msg($('findOut'),'ok','รับแล้ว '+text+(r.found?' (ส่งด่วน → ชีต)':' (ไม่พบใน Odoo → ชีต)'));
+      else if(n===scanCount) msg($('findOut'),'ok','รับแล้ว '+text+' (ใบที่ '+n+')'+(r.found?' · ส่งด่วน → ชีต':' · ไม่พบใน Odoo → ชีต'));
     }catch(e){ beepErr(); msg($('findOut'),'er','เก็บลงชีตแล้ว แต่ตรวจ Odoo ไม่สำเร็จ ถ้าเป็นงาน Grab/รับเอง/จัดส่งเอง/รับสินค้าเอง ให้สแกนใหม่: '+e.message) }
     return;
   }
   // พิมพ์เลข / เครื่องยิงบาร์โค้ด (ไม่มีภาพจากกล้อง): ตรวจก่อน แล้วเปิดการ์ดให้เลือกรูป
-  if(busy) return; busy=true; beepScan();
+  if(busy) return; busy=true; if(sndOn()) beepScan();
   $('findOut').innerHTML='<p class="mu">กำลังค้นหา…</p>';
   try{
     const r=await api({action:'lookup',code:text}); r.sheetDone=false;
