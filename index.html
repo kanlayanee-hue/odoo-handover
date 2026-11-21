@@ -151,10 +151,15 @@ async function find(text,frame){
   text=norm(text); if(!text||busy) return;
   if(frame && text===lastCode && Date.now()-lastAt<6000) return;
   busy=true; beepScan();
-  $('findOut').innerHTML='<p class="mu">กำลังค้นหา…</p>';
+  $('findOut').innerHTML='<p class="mu">'+(frame?'กำลังบันทึก…':'กำลังค้นหา…')+'</p>';
   try{
-    cur=await api({action:'lookup',code:text});
-    if(frame && cur.route==='sheet'){ await quickSave(cur,frame); busy=false; return }
+    cur=frame?await api({action:'scan',code:text,photos:[frame.split(',')[1]]}):await api({action:'lookup',code:text});
+    if(cur.saved){
+      addHist(cur.code,1); lastCode=cur.code; lastAt=Date.now(); beepOK();
+      if(navigator.vibrate) navigator.vibrate(60);
+      msg($('findOut'),'ok','บันทึกแล้ว '+cur.code+(cur.found?' (ส่งด่วน → ชีต)':' (ไม่พบใน Odoo → ชีต)'));
+      busy=false; return;
+    }
     if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง' }
     if(navigator.vibrate) navigator.vibrate(60);
     pics=[]; draw(); $('findOut').innerHTML=''; $('saveOut').innerHTML=''; $('note').value='';
