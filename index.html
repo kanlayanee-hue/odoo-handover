@@ -52,6 +52,7 @@ button.g{background:#eef0f8;color:#1f2437}button:disabled{opacity:.5}
     <div id="reader"></div>
     <div id="findOut"></div>
     <div id="qstat"></div>
+    <div id="todo" class="mu"></div>
   </div>
 
   <div class="card" id="shoot" hidden>
@@ -84,6 +85,7 @@ async function api(body){
   const r=await fetch(API_URL,{method:'POST',body:JSON.stringify({...body,pin})});
   const j=await r.json(); if(j.error) throw new Error(j.error); return j;
 }
+setInterval(()=>{ if(!document.hidden&&sc&&sc.isScanning) api({action:'ping'}).catch(()=>{}) },240000);
 function msg(el,cls,t){ el.innerHTML='<div class="msg '+cls+'"></div>'; el.firstChild.textContent=t }
 
 function start(){ $('setup').hidden=true; $('app').hidden=false; hist(); $('code').focus() }
@@ -98,11 +100,11 @@ $('enter').onclick=async()=>{
 $('code').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); find($('code').value) } });
 
 $('cam').onclick=async()=>{
-  unlockAudio();
+  unlockAudio(); api({action:'ping'}).catch(()=>{});
   if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง'; return }
   try{
     sc=sc||new Html5Qrcode('reader',{formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE,Html5QrcodeSupportedFormats.CODE_128,Html5QrcodeSupportedFormats.CODE_39],experimentalFeatures:{useBarCodeDetectorIfSupported:true},verbose:false});
-    await sc.start({facingMode:'environment'},{fps:25,disableFlip:true,qrbox:(w,h)=>({width:Math.floor(w*.92),height:Math.floor(h*.8)}),videoConstraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}},t=>{ if(!busy) find(t,snap()) },()=>{});
+    await sc.start({facingMode:'environment'},{fps:25,disableFlip:true,qrbox:(w,h)=>({width:Math.floor(w*.92),height:Math.floor(h*.8)}),videoConstraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}},t=>{ const c=norm(t); if(c===lastCode&&Date.now()-lastAt<6000) return; find(t,snap()) },()=>{});
     $('cam').textContent='⏹ ปิดกล้อง';
   }catch(e){ msg($('findOut'),'er','เปิดกล้องไม่ได้ อนุญาตการใช้กล้องในเบราว์เซอร์') }
 };
@@ -180,29 +182,46 @@ function updateStatus(){
 }
 window.addEventListener('beforeunload',e=>{ if(queue.length||sending||failed.length){ e.preventDefault(); e.returnValue='' } });
 
+let inflight=0; const todo=[];
+function cardOpen(){ return !$('shoot').hidden }
+function renderTodo(){
+  $('todo').textContent=todo.length?('รอถ่ายรูปส่ง Odoo อีก '+todo.length+' ใบ: '+todo.map(x=>x.code).join(', ')):'';
+}
+function openCard(r){
+  cur=r; pics=[]; draw(); $('findOut').innerHTML=''; $('saveOut').innerHTML=''; $('note').value='';
+  if(sc&&sc.isScanning){ sc.stop().then(()=>{ $('cam').textContent='▶️ เปิดกล้อง' }).catch(()=>{}) }
+  const odoo=r.route==='odoo';
+  $('oBy').textContent=odoo?(r.sheetDone?'ส่งเข้า Odoo (ชีตบันทึกแล้ว)':'Odoo + ชีต'):'ชีตอย่างเดียว';
+  $('oName').textContent=r.found?r.name+(r.model==='stock.picking'?' (ใบส่งของ)':''):r.code;
+  $('oCust').textContent=(r.partner||'')+((r.delivery_by||[]).length?' · '+r.delivery_by.join(', '):'');
+  $('oWarn').textContent=r.found?'งานส่งด่วน (ไม่ใช่ Grab / รับเอง / จัดส่งเอง / รับสินค้าเอง) จะบันทึกลงชีตอย่างเดียว':'ไม่พบเลขนี้ใน Odoo จะบันทึกลงชีตอย่างเดียว ตรวจเลขให้ถูกก่อนบันทึก';
+  $('oWarn').hidden=odoo; $('shoot').hidden=false; renderTodo();
+}
+function offer(r){ if(cardOpen()){ todo.push(r); renderTodo() } else openCard(r) }
+
 async function find(text,frame){
-  text=norm(text); if(!text||busy) return;
-  if(frame && text===lastCode && Date.now()-lastAt<6000) return;
-  busy=true; beepScan();
-  $('findOut').innerHTML='<p class="mu">กำลังตรวจสอบ…</p>';
+  text=norm(text); if(!text) return;
+  if(frame){
+    // สแกนด้วยกล้อง: เสียง + แถบเขียว + เก็บลงชีตทันที แล้วค่อยตรวจใน Odoo ว่าต้องถ่ายรูปส่ง Odoo หรือไม่
+    if(text===lastCode && Date.now()-lastAt<6000) return;
+    lastCode=text; lastAt=Date.now();
+    beepScan(); if(navigator.vibrate) navigator.vibrate(60);
+    enqueue({code:text,photo:frame.split(',')[1]});
+    msg($('findOut'),'ok','รับแล้ว '+text+' …');
+    try{
+      const r=await api({action:'lookup',code:text}); r.sheetDone=true;
+      if(r.route==='odoo'){ beepOK(); offer(r) }
+      else msg($('findOut'),'ok','รับแล้ว '+text+(r.found?' (ส่งด่วน → ชีต)':' (ไม่พบใน Odoo → ชีต)'));
+    }catch(e){ beepErr(); msg($('findOut'),'er','เก็บลงชีตแล้ว แต่ตรวจ Odoo ไม่สำเร็จ ถ้าเป็นงาน Grab/รับเอง/จัดส่งเอง/รับสินค้าเอง ให้สแกนใหม่: '+e.message) }
+    return;
+  }
+  // พิมพ์เลข / เครื่องยิงบาร์โค้ด (ไม่มีภาพจากกล้อง): ตรวจก่อน แล้วเปิดการ์ดให้เลือกรูป
+  if(busy) return; busy=true; beepScan();
+  $('findOut').innerHTML='<p class="mu">กำลังค้นหา…</p>';
   try{
-    cur=await api({action:'lookup',code:text});
-    if(frame && cur.route==='sheet'){
-      lastCode=cur.code; lastAt=Date.now(); beepOK();
-      if(navigator.vibrate) navigator.vibrate(60);
-      msg($('findOut'),'ok','รับแล้ว '+cur.code+(cur.found?' (ส่งด่วน → ชีต)':' (ไม่พบใน Odoo → ชีต)'));
-      enqueue({code:cur.code,photo:frame.split(',')[1]});
-      busy=false; return;
-    }
-    if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง' }
+    const r=await api({action:'lookup',code:text}); r.sheetDone=false;
     if(navigator.vibrate) navigator.vibrate(60);
-    pics=[]; draw(); $('findOut').innerHTML=''; $('saveOut').innerHTML=''; $('note').value='';
-    const odoo=cur.route==='odoo';
-    $('oBy').textContent=odoo?'Odoo + ชีต':'ชีตอย่างเดียว';
-    $('oName').textContent=cur.found?cur.name+(cur.model==='stock.picking'?' (ใบส่งของ)':''):cur.code;
-    $('oCust').textContent=(cur.partner||'')+((cur.delivery_by||[]).length?' · '+cur.delivery_by.join(', '):'');
-    $('oWarn').textContent=cur.found?'งานส่งด่วน (ไม่ใช่ Grab / รับเอง / จัดส่งเอง / รับสินค้าเอง) จะบันทึกลงชีตอย่างเดียว':'ไม่พบเลขนี้ใน Odoo จะบันทึกลงชีตอย่างเดียว ตรวจเลขให้ถูกก่อนบันทึก';
-    $('oWarn').hidden=odoo; $('shoot').hidden=false;
+    openCard(r);
   }catch(e){ msg($('findOut'),'er',e.message); beepErr(); $('code').select() }
   busy=false;
 }
@@ -221,14 +240,15 @@ function draw(){
     im.src=p; x.textContent='×'; x.onclick=()=>{pics.splice(i,1);draw()}; d.append(im,x); $('th').append(d) });
   $('save').disabled=!pics.length;
 }
-function reset(){ cur=null; pics=[]; $('shoot').hidden=true; $('code').value=''; $('code').focus() }
+function reset(){ cur=null; pics=[]; $('shoot').hidden=true; $('code').value=''; if(todo.length){ openCard(todo.shift()) } else { $('code').focus() } }
 $('cancel').onclick=reset;
 
 $('save').onclick=async()=>{
   if(!cur.found && !confirm('ไม่พบเลขนี้ใน Odoo บันทึกเป็นงานส่งด่วน (ชีตอย่างเดียว) ใช่ไหม')) return;
   $('save').disabled=true; $('save').textContent='กำลังบันทึก…';
   try{
-    const r=await api({action:'save',code:cur.code,route:cur.route,model:cur.model,id:cur.id,staff,note:$('note').value,photos:pics.map(p=>p.split(',')[1])});
+    const r=await api({action:'save',code:cur.code,route:(cur.sheetDone&&cur.route==='odoo'?'odoo_only':cur.route),model:cur.model,id:cur.id,staff,note:$('note').value,photos:pics.map(p=>p.split(',')[1])});
+    if(cur.route==='odoo'&&!r.odoo) throw new Error('Apps Script ยังเป็นเวอร์ชันเก่า กรุณา Deploy ใหม่ก่อน');
     const h=JSON.parse(localStorage.getItem('hist')||'[]');
     h.unshift({n:r.name,c:r.photos,t:new Date().toLocaleString('th-TH',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})});
     localStorage.setItem('hist',JSON.stringify(h.slice(0,10))); hist();
