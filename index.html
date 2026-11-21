@@ -159,9 +159,15 @@ function pump(){
   while(sending<2 && queue.length){
     const job=queue.shift(); sending++;
     (async()=>{
-      try{ await api({action:'save',code:job.code,route:'sheet',staff,note:'',photos:[await job.photo]}); addHist(job.code,1) }
+      try{
+        if(job.type==='odoo'){
+          const r=await api({action:'save',code:job.code,route:job.route,model:job.model,id:job.id,name:job.name,staff:job.staff,note:job.note,photos:job.photos});
+          if(job.route!=='sheet' && !r.odoo) throw new Error('Apps Script ยังเป็นเวอร์ชันเก่า กรุณา Deploy ใหม่');
+          addHist(job.name||job.code,job.photos.length);
+        } else { await api({action:'save',code:job.code,route:'sheet',staff,note:'',photos:[await job.photo]}); addHist(job.code,1) }
+      }
       catch(e){
-        job.tries=(job.tries||0)+1;
+        job.tries=(job.tries||0)+1; if(String(e.message).includes('เวอร์ชันเก่า')) job.tries=3;
         if(job.tries<3){ await sleep(1500*job.tries); queue.push(job) } else { failed.push(job); beepErr() }
       }
       sending--; updateStatus(); pump();
@@ -172,13 +178,13 @@ function updateStatus(){
   const el=$('qstat'), pending=queue.length+sending; el.innerHTML='';
   if(failed.length){
     const d=document.createElement('div'); d.className='msg er';
-    d.textContent='ส่งเข้าชีตไม่สำเร็จ '+failed.length+' รายการ ('+failed.map(j=>j.code).join(', ')+') ';
+    d.textContent='ส่งไม่สำเร็จ '+failed.length+' รายการ ('+failed.map(j=>j.code).join(', ')+') ';
     const b=document.createElement('button'); b.className='g'; b.textContent='ลองส่งใหม่';
     b.onclick=()=>{ while(failed.length) queue.push(failed.shift()); pump(); updateStatus() };
     d.appendChild(b); el.appendChild(d); return;
   }
-  if(pending){ el.innerHTML='<p class="mu">กำลังส่งเข้าชีต '+pending+' รายการ…</p>'; qDone=true }
-  else if(qDone){ qDone=false; msg(el,'ok','ส่งเข้าชีตครบแล้ว ✓');
+  if(pending){ el.innerHTML='<p class="mu">กำลังส่ง '+pending+' รายการ…</p>'; qDone=true }
+  else if(qDone){ qDone=false; msg(el,'ok','ส่งครบแล้ว ✓');
     setTimeout(()=>{ if(!queue.length&&!sending&&!failed.length) el.innerHTML='' },3000) }
 }
 window.addEventListener('beforeunload',e=>{ if(queue.length||sending||failed.length){ e.preventDefault(); e.returnValue='' } });
@@ -229,9 +235,9 @@ async function find(text,frame){
 
 function shrink(f){return new Promise(res=>{
   const im=new Image(); im.onload=()=>{
-    const s=Math.min(1,1400/Math.max(im.width,im.height)), c=document.createElement('canvas');
+    const s=Math.min(1,1280/Math.max(im.width,im.height)), c=document.createElement('canvas');
     c.width=im.width*s; c.height=im.height*s; c.getContext('2d').drawImage(im,0,0,c.width,c.height);
-    res(c.toDataURL('image/jpeg',.75)); URL.revokeObjectURL(im.src);
+    res(c.toDataURL('image/jpeg',.7)); URL.revokeObjectURL(im.src);
   }; im.src=URL.createObjectURL(f);
 })}
 $('pic').onchange=async e=>{ for(const f of e.target.files){ if(pics.length<8) pics.push(await shrink(f)) } e.target.value=''; draw() };
@@ -244,18 +250,15 @@ function draw(){
 function reset(){ cur=null; pics=[]; $('shoot').hidden=true; $('code').value=''; if(todo.length){ openCard(todo.shift()) } else { $('code').focus() } }
 $('cancel').onclick=reset;
 
-$('save').onclick=async()=>{
+$('save').onclick=()=>{
+  if(!cur) return;
   if(!cur.found && !confirm('ไม่พบเลขนี้ใน Odoo บันทึกเป็นงานส่งด่วน (ชีตอย่างเดียว) ใช่ไหม')) return;
-  $('save').disabled=true; $('save').textContent='กำลังบันทึก…';
-  try{
-    const r=await api({action:'save',code:cur.code,route:(cur.sheetDone&&cur.route==='odoo'?'odoo_only':cur.route),model:cur.model,id:cur.id,staff,note:$('note').value,photos:pics.map(p=>p.split(',')[1])});
-    if(cur.route==='odoo'&&!r.odoo) throw new Error('Apps Script ยังเป็นเวอร์ชันเก่า กรุณา Deploy ใหม่ก่อน');
-    const h=JSON.parse(localStorage.getItem('hist')||'[]');
-    h.unshift({n:r.name,c:r.photos,t:new Date().toLocaleString('th-TH',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})});
-    localStorage.setItem('hist',JSON.stringify(h.slice(0,10))); hist();
-    msg($('saveOut'),'ok','บันทึกแล้ว '+r.photos+' รูป ที่ '+r.name+(r.odoo?' (ส่งเข้า Odoo และชีต)':' (ชีต)')); beepOK(); setTimeout(reset,1800);
-  }catch(e){ msg($('saveOut'),'er',e.message); beepErr() }
-  $('save').textContent='บันทึกลง Odoo'; draw();
+  const route=(cur.sheetDone&&cur.route==='odoo'?'odoo_only':cur.route);
+  const job={type:'odoo',code:cur.code,route:route,model:cur.model,id:cur.id,name:cur.found?cur.name:cur.code,
+    staff,note:$('note').value,photos:pics.map(p=>p.split(',')[1])};
+  enqueue(job); beepOK(); if(navigator.vibrate) navigator.vibrate(60);
+  msg($('findOut'),'ok','รับแล้ว '+job.name+' กำลังส่งเข้า '+(route==='sheet'?'ชีต':'Odoo')+' …');
+  reset();
 };
 function hist(){
   const h=JSON.parse(localStorage.getItem('hist')||'[]'); $('hist').innerHTML='';
