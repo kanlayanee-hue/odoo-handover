@@ -51,6 +51,7 @@ button.g{background:#eef0f8;color:#1f2437}button:disabled{opacity:.5}
     <button id="cam">▶️ เปิดกล้อง</button>
     <div id="reader"></div>
     <div id="findOut"></div>
+    <div id="qstat"></div>
   </div>
 
   <div class="card" id="shoot" hidden>
@@ -129,7 +130,7 @@ function snap(){
   const v=document.querySelector('#reader video'); if(!v||!v.videoWidth) return null;
   const s=Math.min(1,1400/Math.max(v.videoWidth,v.videoHeight)), c=document.createElement('canvas');
   c.width=v.videoWidth*s; c.height=v.videoHeight*s; c.getContext('2d').drawImage(v,0,0,c.width,c.height);
-  return c.toDataURL('image/jpeg',.8);
+  return c.toDataURL('image/jpeg',.72);
 }
 function addHist(n,c){
   const h=JSON.parse(localStorage.getItem('hist')||'[]');
@@ -147,17 +148,50 @@ async function quickSave(c,frame){
   }catch(e){ msg($('findOut'),'er',e.message); beepErr() }
 }
 
+// คิวส่งเข้าชีตเบื้องหลัง: แจ้งว่ารับแล้วทันที แล้วส่งต่อโดยไม่บล็อกการสแกนใบถัดไป
+const queue=[], failed=[]; let sending=0, qDone=false;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function enqueue(job){ queue.push(job); pump(); updateStatus() }
+function pump(){
+  while(sending<2 && queue.length){
+    const job=queue.shift(); sending++;
+    (async()=>{
+      try{ await api({action:'save',code:job.code,route:'sheet',staff,note:'',photos:[job.photo]}); addHist(job.code,1) }
+      catch(e){
+        job.tries=(job.tries||0)+1;
+        if(job.tries<3){ await sleep(1500*job.tries); queue.push(job) } else { failed.push(job); beepErr() }
+      }
+      sending--; updateStatus(); pump();
+    })();
+  }
+}
+function updateStatus(){
+  const el=$('qstat'), pending=queue.length+sending; el.innerHTML='';
+  if(failed.length){
+    const d=document.createElement('div'); d.className='msg er';
+    d.textContent='ส่งเข้าชีตไม่สำเร็จ '+failed.length+' รายการ ('+failed.map(j=>j.code).join(', ')+') ';
+    const b=document.createElement('button'); b.className='g'; b.textContent='ลองส่งใหม่';
+    b.onclick=()=>{ while(failed.length) queue.push(failed.shift()); pump(); updateStatus() };
+    d.appendChild(b); el.appendChild(d); return;
+  }
+  if(pending){ el.innerHTML='<p class="mu">กำลังส่งเข้าชีต '+pending+' รายการ…</p>'; qDone=true }
+  else if(qDone){ qDone=false; msg(el,'ok','ส่งเข้าชีตครบแล้ว ✓');
+    setTimeout(()=>{ if(!queue.length&&!sending&&!failed.length) el.innerHTML='' },3000) }
+}
+window.addEventListener('beforeunload',e=>{ if(queue.length||sending||failed.length){ e.preventDefault(); e.returnValue='' } });
+
 async function find(text,frame){
   text=norm(text); if(!text||busy) return;
   if(frame && text===lastCode && Date.now()-lastAt<6000) return;
   busy=true; beepScan();
-  $('findOut').innerHTML='<p class="mu">'+(frame?'กำลังบันทึก…':'กำลังค้นหา…')+'</p>';
+  $('findOut').innerHTML='<p class="mu">กำลังตรวจสอบ…</p>';
   try{
-    cur=frame?await api({action:'scan',code:text,photos:[frame.split(',')[1]]}):await api({action:'lookup',code:text});
-    if(cur.saved){
-      addHist(cur.code,1); lastCode=cur.code; lastAt=Date.now(); beepOK();
+    cur=await api({action:'lookup',code:text});
+    if(frame && cur.route==='sheet'){
+      lastCode=cur.code; lastAt=Date.now(); beepOK();
       if(navigator.vibrate) navigator.vibrate(60);
-      msg($('findOut'),'ok','บันทึกแล้ว '+cur.code+(cur.found?' (ส่งด่วน → ชีต)':' (ไม่พบใน Odoo → ชีต)'));
+      msg($('findOut'),'ok','รับแล้ว '+cur.code+(cur.found?' (ส่งด่วน → ชีต)':' (ไม่พบใน Odoo → ชีต)'));
+      enqueue({code:cur.code,photo:frame.split(',')[1]});
       busy=false; return;
     }
     if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง' }
