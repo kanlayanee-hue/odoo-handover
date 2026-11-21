@@ -104,7 +104,7 @@ $('cam').onclick=async()=>{
   if(sc&&sc.isScanning){ await sc.stop(); $('cam').textContent='▶️ เปิดกล้อง'; return }
   try{
     sc=sc||new Html5Qrcode('reader',{formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE,Html5QrcodeSupportedFormats.CODE_128,Html5QrcodeSupportedFormats.CODE_39],experimentalFeatures:{useBarCodeDetectorIfSupported:true},verbose:false});
-    await sc.start({facingMode:'environment'},{fps:25,disableFlip:true,qrbox:(w,h)=>({width:Math.floor(w*.92),height:Math.floor(h*.8)}),videoConstraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}},t=>{ const c=norm(t); if(c===lastCode&&Date.now()-lastAt<6000) return; find(t,snap()) },()=>{});
+    await sc.start({facingMode:'environment'},{fps:25,disableFlip:true,qrbox:(w,h)=>({width:Math.floor(w*.92),height:Math.floor(h*.8)}),videoConstraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}},t=>{ const c=norm(t); if(c===lastCode&&Date.now()-lastAt<6000) return; const cv=grab(); if(cv) beepScan(); find(t,cv) },()=>{});
     $('cam').textContent='⏹ ปิดกล้อง';
   }catch(e){ msg($('findOut'),'er','เปิดกล้องไม่ได้ อนุญาตการใช้กล้องในเบราว์เซอร์') }
 };
@@ -128,12 +128,13 @@ function norm(t){
   return m?m[0]:t;
 }
 // ถ่ายภาพจากเฟรมกล้องในจังหวะที่สแกนได้
-function snap(){
+function grab(){
   const v=document.querySelector('#reader video'); if(!v||!v.videoWidth) return null;
   const s=Math.min(1,1400/Math.max(v.videoWidth,v.videoHeight)), c=document.createElement('canvas');
   c.width=v.videoWidth*s; c.height=v.videoHeight*s; c.getContext('2d').drawImage(v,0,0,c.width,c.height);
-  return c.toDataURL('image/jpeg',.72);
+  return c;
 }
+function encode(c){ return new Promise(res=>c.toBlob(b=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.readAsDataURL(b) },'image/jpeg',.72)) }
 function addHist(n,c){
   const h=JSON.parse(localStorage.getItem('hist')||'[]');
   h.unshift({n:n,c:c,t:new Date().toLocaleString('th-TH',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})});
@@ -158,7 +159,7 @@ function pump(){
   while(sending<2 && queue.length){
     const job=queue.shift(); sending++;
     (async()=>{
-      try{ await api({action:'save',code:job.code,route:'sheet',staff,note:'',photos:[job.photo]}); addHist(job.code,1) }
+      try{ await api({action:'save',code:job.code,route:'sheet',staff,note:'',photos:[await job.photo]}); addHist(job.code,1) }
       catch(e){
         job.tries=(job.tries||0)+1;
         if(job.tries<3){ await sleep(1500*job.tries); queue.push(job) } else { failed.push(job); beepErr() }
@@ -205,8 +206,8 @@ async function find(text,frame){
     // สแกนด้วยกล้อง: เสียง + แถบเขียว + เก็บลงชีตทันที แล้วค่อยตรวจใน Odoo ว่าต้องถ่ายรูปส่ง Odoo หรือไม่
     if(text===lastCode && Date.now()-lastAt<6000) return;
     lastCode=text; lastAt=Date.now();
-    beepScan(); if(navigator.vibrate) navigator.vibrate(60);
-    enqueue({code:text,photo:frame.split(',')[1]});
+    if(navigator.vibrate) navigator.vibrate(60);
+    enqueue({code:text,photo:encode(frame)});
     msg($('findOut'),'ok','รับแล้ว '+text+' …');
     try{
       const r=await api({action:'lookup',code:text}); r.sheetDone=true;
